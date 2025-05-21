@@ -1,0 +1,7 @@
+venv/
+data/
+__pycache__/
+*.py[cod]
+*.pyo
+.DS_Store
+scratch_work.ipynb
