@@ -1,6 +1,9 @@
 """
 This script creates metrics for pitch arsenals, including bridge scores, arsenal spread,
-entropy, velocity buckets, and pairwise velocity differential. 
+entropy, velocity buckets, pairwise velocity differential, and average fastball velocity.
+
+Author: Ryan Wong
+Date: April 25, 2025
 """
 import pandas as pd
 import numpy as np
@@ -73,6 +76,17 @@ def assign_velocity_bucket(max_velo):
     else:
         return 'Low Velo'
 
+def calculate_average_fastball_velocity(df, fastball_types=['FF', 'SI', 'FT', 'FC']):
+    """
+    Calculate the average fastball velocity for each pitcher and season.
+    Arguments:
+        df (DataFrame): DataFrame containing pitch data.
+        fastball_types (list): List of pitch types considered as fastballs.
+    Returns:
+        DataFrame: DataFrame containing average fastball velocities."""
+    fastballs = df[df['pitch_type'].isin(fastball_types)]
+    return fastballs.groupby(['pitcher', 'player_name', 'season'])['release_speed_mean'].mean().reset_index(name='avg_fastball_velocity')
+
 def calculate_bridge_scores(df, group_cols, pfx_x_col='pfx_x_mean', pfx_z_col='pfx_z_mean',
                             usage_col='pitch_type', usage_count_col='num_pitches',
                             min_usage_rate=0.05,
@@ -103,7 +117,7 @@ def calculate_bridge_scores(df, group_cols, pfx_x_col='pfx_x_mean', pfx_z_col='p
         group_data = group_data[group_data['pitch_usage_pct'] >= min_usage_rate]
 
         if group_data[usage_col].nunique() < 3:
-            results.append(list(group_keys) + [np.nan, np.nan, 0])
+            results.append(list(group_keys) + [0.0, 0.0])
             continue
 
         group_data = group_data.groupby(usage_col)[[pfx_x_col, pfx_z_col]].mean().reset_index()
@@ -132,10 +146,10 @@ def calculate_bridge_scores(df, group_cols, pfx_x_col='pfx_x_mean', pfx_z_col='p
                     valid_scores.append(score)
 
         total_score = np.sum(valid_scores)
-        avg_score = np.mean(valid_scores) if valid_scores else np.nan
-        results.append(list(group_keys) + [total_score, avg_score, len(valid_scores)])
+        avg_score = np.mean(valid_scores) if valid_scores else 0.0
+        results.append(list(group_keys) + [total_score, avg_score])
 
-    columns = group_cols + ['total_bridge_score', 'average_bridge_quality', 'num_valid_triplets']
+    columns = group_cols + ['total_bridge_score', 'average_bridge_quality']
     return pd.DataFrame(results, columns=columns)
 
 def calculate_arsenal_spread(df, group_cols, 
@@ -190,10 +204,8 @@ if __name__ == "__main__":
     parser.add_argument("--bridge_output", type=str, default="data/bridge_scores.csv", help="Output path for bridge scores")
     parser.add_argument("--spread_output", type=str, default="data/arsenal_spread.csv", help="Output path for arsenal spread")
     parser.add_argument("--final_output", type=str, default="data/final_arsenal_metrics.csv", help="Output path for merged final metrics")
-    parser.add_argument("--xwobacon_csv", type=str, default="data/xwobacon_by_pitcher.csv", help="Path to xwOBACON data")
 
     args = parser.parse_args()
-
     df = pd.read_csv(args.input)
 
     bridge_scores_df = calculate_bridge_scores(
@@ -229,6 +241,8 @@ if __name__ == "__main__":
     velo_df = df[df['pitch_usage_pct'] >= 0.05].groupby(['pitcher', 'player_name', 'season'])['release_speed_mean'].max().reset_index()
     velo_df['velo_bucket'] = velo_df['release_speed_mean'].apply(assign_velocity_bucket)
 
+    avg_fb_velo_df = calculate_average_fastball_velocity(df)
+
     final_arsenal_metrics = pd.merge(
         bridge_scores_df,
         arsenal_spread_df,
@@ -250,6 +264,13 @@ if __name__ == "__main__":
         how='left'
     )
 
+    final_arsenal_metrics = pd.merge(
+        final_arsenal_metrics,
+        avg_fb_velo_df,
+        on=['pitcher', 'player_name', 'season'],
+        how='left'
+    )
+
     velo_diff_df = df.groupby(['pitcher', 'player_name', 'season']).apply(
         pairwise_velo_diff
     ).reset_index(name='velocity_diff_unweighted')
@@ -261,17 +282,19 @@ if __name__ == "__main__":
         how='left'
     )
 
-    if os.path.exists(args.xwobacon_csv):
-        xwobacon_df = pd.read_csv(args.xwobacon_csv)
-        final_arsenal_metrics = pd.merge(
-            final_arsenal_metrics,
-            xwobacon_df,
-            on=['pitcher', 'player_name', 'season'],
-            how='left'
-        )
-        print("xwOBACON data merged into final arsenal metrics.")
-    else:
-        print(f"xwOBACON file not found: {args.xwobacon_csv}")
+    final_arsenal_metrics = pd.merge(
+        final_arsenal_metrics,
+        df[['pitcher', 'player_name', 'season', 'xwOBACON', 'csw_rate', 'xERA']].drop_duplicates(),
+        on=['pitcher', 'player_name', 'season'],
+        how='left'
+    )
+
+    final_arsenal_metrics = final_arsenal_metrics[[
+        'pitcher', 'player_name', 'season', 'num_pitch_types', 'velo_bucket',
+        'avg_fastball_velocity', 'total_bridge_score', 'average_bridge_quality',
+        'arsenal_spread', 'pitch_entropy', 'velocity_diff_unweighted',
+        'xwOBACON', 'csw_rate', 'xERA'
+    ]]
 
     final_arsenal_metrics.sort_values('num_pitch_types', ascending=False, inplace=True)
     final_arsenal_metrics.to_csv(args.final_output, index=False)

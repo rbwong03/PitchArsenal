@@ -1,14 +1,22 @@
 """
 This script creates plots of pitch movement for a specified pitcher and season,
-using the bridge metric to identify valid triplets of pitches. It filters the data
-based on usage and computes the average movement for each pitch type.
+using the bridge metric to identify valid triplets of pitches. It also plots kmeans clustering and plotting distributions of the clusters of certain data columns. It filters the data
+based on usage and computes the average movement for each pitch type. 
+
+Author: Ryan Wong
+Date: April 27, 2025
 """
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from itertools import permutations
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_score
 import os
+
 
 def plot_bridge_pitch_clusters(
     raw_data,
@@ -127,3 +135,139 @@ def plot_bridge_pitch_clusters(
         print(f"Saved plot to {filepath}")
 
     plt.close()
+
+
+def plot_elbow_and_silhouette(df, features, save_path='plots/clustering', k_range=range(2, 15)):
+    """
+    Plot elbow method (inertia) and silhouette score side-by-side for a range of KMeans clusters.
+
+    Parameters:
+        df (pd.DataFrame): DataFrame containing features for clustering.
+        features (list): List of column names to use for clustering.
+        save_path (str): Directory to save the output plot.
+        k_range (range): Range of cluster values to try (e.g., range(2, 15)).
+    """
+    os.makedirs(save_path, exist_ok=True)
+
+    X = df[features].dropna().copy()
+
+    inertias = []
+    silhouette_scores = []
+
+    for k in k_range:
+        kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto').fit(X)
+        inertias.append(kmeans.inertia_)
+        silhouette_scores.append(silhouette_score(X, kmeans.labels_))
+
+    # Plot
+    fig, ax1 = plt.subplots(figsize=(8, 6))
+
+    color = 'tab:blue'
+    ax1.set_xlabel('Number of Clusters (k)')
+    ax1.set_ylabel('Clustering Inertia', color=color)
+    ax1.plot(k_range, inertias, marker='o', color=color)
+    ax1.tick_params(axis='y', labelcolor=color)
+    ax1.set_title('KMeans Clustering: Elbow and Silhouette Analysis')
+
+    ax2 = ax1.twinx()
+    color = 'tab:orange'
+    ax2.set_ylabel('Silhouette Score', color=color)
+    ax2.plot(k_range, silhouette_scores, marker='s', linestyle='--', color=color)
+    ax2.tick_params(axis='y', labelcolor=color)
+
+    fig.tight_layout()
+    plt.grid(True)
+    plot_path = os.path.join(save_path, 'elbow_silhouette_plot.png')
+    plt.savefig(plot_path)
+    plt.close()
+    print(f"Plot saved to: {plot_path}")
+
+
+
+def run_kmeans_clustering_and_plotting(input_csv="data/final_arsenal_metrics.csv", k=5):
+    """
+    Run KMeans clustering on pitcher arsenal metrics and plot the results.
+    Parameters:
+        input_csv (str): Path to the input CSV file containing pitcher metrics.
+        k (int): Number of clusters for KMeans.
+    Returns:
+        df (pd.DataFrame): DataFrame with cluster assignments and PCA components.
+    """
+    df = pd.read_csv(input_csv)
+    df[['total_bridge_score', 'average_bridge_quality']] = df[['total_bridge_score', 'average_bridge_quality']].fillna(0)
+
+    features = [
+        'total_bridge_score',
+        'arsenal_spread',
+        'pitch_entropy',
+        'velocity_diff_unweighted',
+    ]
+
+    X = df[features].dropna()
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    kmeans = KMeans(n_clusters=k, random_state=42)
+    df.loc[X.index, 'cluster'] = kmeans.fit_predict(X_scaled)
+
+    pca = PCA(n_components=2)
+    components = pca.fit_transform(X_scaled)
+    df.loc[X.index, 'pca1'] = components[:, 0]
+    df.loc[X.index, 'pca2'] = components[:, 1]
+
+    plt.figure(figsize=(10, 6))
+    sns.scatterplot(data=df.loc[X.index], x='pca1', y='pca2', hue='cluster', palette='tab10', s=80)
+    plt.title("KMeans Clusters of Pitcher Arsenal Profiles (PCA-reduced)")
+    plt.xlabel("Principal Component 1")
+    plt.ylabel("Principal Component 2")
+    plt.legend(title='Cluster')
+    plt.grid(True)
+    plt.tight_layout()
+
+    os.makedirs("plots/clustering", exist_ok=True)
+    plt.savefig("plots/clustering/kmeans_clusters.pdf")
+    df.to_csv("data/clustered_pitchers.csv", index=False)
+    print("Saved cluster plot to plots/clustering/kmeans_clusters.pdf")
+
+    plt.show()
+
+    return df
+
+
+def plot_feature_distributions_by_cluster(df, features, cluster_col='cluster', save_path='plots/clustering'):
+    """
+    Plot feature distributions by cluster using violin plots.
+    Parameters:
+        df (pd.DataFrame): DataFrame containing features and cluster assignments.
+        features (list): List of feature names to plot.
+        cluster_col (str): Column name for cluster assignments.
+        save_path (str): Directory to save the output plots.
+    """
+    os.makedirs(save_path, exist_ok=True)
+
+    df[cluster_col] = pd.to_numeric(df[cluster_col], errors='coerce')
+    df = df[df[cluster_col].notna()].copy()
+    df[cluster_col] = df[cluster_col].astype(int)
+    sorted_clusters = sorted(df[cluster_col].unique())
+
+    for feature in features:
+        plot_df = df[[cluster_col, feature]].dropna().copy()
+
+        plot_df[cluster_col] = pd.Categorical(plot_df[cluster_col], categories=sorted_clusters, ordered=True)
+
+        plt.figure(figsize=(8, 6))
+        sns.violinplot(
+            x=cluster_col,
+            y=feature,
+            data=plot_df,
+            order=sorted_clusters,
+            inner='box'
+        )
+        plt.title(f'{feature} by Cluster')
+        plt.xlabel('Cluster')
+        plt.ylabel(feature)
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.tight_layout()
+        plt.savefig(f'{save_path}/violin_{feature}_by_cluster.png')
+        plt.close()
