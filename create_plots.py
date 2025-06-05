@@ -127,10 +127,10 @@ def plot_bridge_pitch_clusters(
     plt.tight_layout()
 
     if save:
-        folder = f"{metric_name}_plots"
+        folder = f"plots/{metric_name}"
         os.makedirs(folder, exist_ok=True)
         safe_name = pitcher_name.replace(", ", "_").replace(" ", "_")
-        filepath = os.path.join(folder, f"{safe_name}_{season}.pdf")
+        filepath = os.path.join(folder, f"{safe_name}_{season}.png")
         plt.savefig(filepath)
         print(f"Saved plot to {filepath}")
 
@@ -184,7 +184,7 @@ def plot_elbow_and_silhouette(df, features, save_path='plots/clustering', k_rang
 
 
 
-def run_kmeans_clustering_and_plotting(input_csv="data/final_arsenal_metrics.csv", k=5):
+def run_kmeans_clustering_and_plotting(input_csv="data/final_metrics/final_arsenal_metrics.csv", k=5):
     """
     Run KMeans clustering on pitcher arsenal metrics and plot the results.
     Parameters:
@@ -200,7 +200,8 @@ def run_kmeans_clustering_and_plotting(input_csv="data/final_arsenal_metrics.csv
         'total_bridge_score',
         'arsenal_spread',
         'pitch_entropy',
-        'velocity_diff_unweighted',
+        'velocity_diff',
+        'avg_fastball_velocity',
     ]
 
     X = df[features].dropna()
@@ -226,25 +227,25 @@ def run_kmeans_clustering_and_plotting(input_csv="data/final_arsenal_metrics.csv
     plt.tight_layout()
 
     os.makedirs("plots/clustering", exist_ok=True)
-    plt.savefig("plots/clustering/kmeans_clusters.pdf")
-    df.to_csv("data/clustered_pitchers.csv", index=False)
-    print("Saved cluster plot to plots/clustering/kmeans_clusters.pdf")
+    os.makedirs("data/clustering", exist_ok=True)
+    plt.savefig("plots/clustering/kmeans_clusters.png")
+    df.to_csv("data/clustering/clustered_pitchers.csv", index=False)
+    print("Saved cluster plot to plots/clustering/kmeans_clusters.png")
 
     plt.show()
 
     return df
 
 
-def plot_feature_distributions_by_cluster(df, features, cluster_col='cluster', save_path='plots/clustering'):
+def plot_feature_distributions_by_cluster(df, features, cluster_col='cluster'):
     """
-    Plot feature distributions by cluster using violin plots.
+    Plot feature distributions by cluster using violin plots and annotate with means.
+
     Parameters:
         df (pd.DataFrame): DataFrame containing features and cluster assignments.
         features (list): List of feature names to plot.
         cluster_col (str): Column name for cluster assignments.
-        save_path (str): Directory to save the output plots.
     """
-    os.makedirs(save_path, exist_ok=True)
 
     df[cluster_col] = pd.to_numeric(df[cluster_col], errors='coerce')
     df = df[df[cluster_col].notna()].copy()
@@ -253,21 +254,41 @@ def plot_feature_distributions_by_cluster(df, features, cluster_col='cluster', s
 
     for feature in features:
         plot_df = df[[cluster_col, feature]].dropna().copy()
-
         plot_df[cluster_col] = pd.Categorical(plot_df[cluster_col], categories=sorted_clusters, ordered=True)
 
+        cluster_means = plot_df.groupby(cluster_col)[feature].mean()
+
         plt.figure(figsize=(8, 6))
-        sns.violinplot(
+        ax = sns.violinplot(
             x=cluster_col,
             y=feature,
             data=plot_df,
             order=sorted_clusters,
             inner='box'
         )
+
+        sns.pointplot(
+            x=cluster_means.index,
+            y=cluster_means.values,
+            color='red',
+            join=False,
+            markers='D',
+            scale=1.2,
+            ax=ax
+        )
+
+        for i, mean_val in enumerate(cluster_means.values):
+            ax.text(i, mean_val + 0.02 * plot_df[feature].max(), f'{mean_val:.2f}', 
+                    color='red', ha='center', fontsize=9)
+
         plt.title(f'{feature} by Cluster')
         plt.xlabel('Cluster')
         plt.ylabel(feature)
         plt.grid(True, linestyle='--', alpha=0.6)
         plt.tight_layout()
-        plt.savefig(f'{save_path}/violin_{feature}_by_cluster.png')
+        os.makedirs("plots/clustering/violin_plots", exist_ok=True)
+        plt.savefig(f'plots/clustering/violin_plots/violin_{feature}_by_cluster.png')
         plt.close()
+
+        print(f"\nMeans for {feature}:")
+        print(cluster_means.round(2))

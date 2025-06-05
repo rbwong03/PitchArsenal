@@ -59,22 +59,30 @@ def calculate_entropy(group, usage_count_col='num_pitches', min_pitches=300):
     entropy = -sum(p * np.log2(p) for p in probs)
     return entropy
 
-def assign_velocity_bucket(max_velo):
+def make_velocity_quartile_function(df, velocity_col="release_speed_mean"):
     """
-    Assign a velocity bucket based on the maximum velocity.
+    Returns a function that assigns velocity quartile labels based on the distribution of velocities in the provided DataFrame.
+
     Arguments:
-        max_velo (float): Maximum velocity of the pitch.
+        df (pd.DataFrame): DataFrame containing velocity data.
+        velocity_col (str): Column name to compute quartiles from.
+
     Returns:
-        str: Velocity bucket label.
+        function: A function that takes a single velocity value and returns a quartile bucket.
     """
-    if max_velo >= 97:
-        return 'Elite Velo'
-    elif max_velo >= 94:
-        return 'High Velo'
-    elif max_velo >= 90:
-        return 'Average Velo'
-    else:
-        return 'Low Velo'
+    q33 = df[velocity_col].quantile(1/3)
+    q66 = df[velocity_col].quantile(2/3)
+
+    def assign_bucket(v):
+        if v <= q33:
+            return "Velo Q1"
+        elif v <= q66:
+            return "Velo Q2"
+        else:
+            return "Velo Q3"
+
+
+    return assign_bucket
 
 def calculate_average_fastball_velocity(df, fastball_types=['FF', 'SI', 'FT', 'FC']):
     """
@@ -239,7 +247,8 @@ if __name__ == "__main__":
 
     df['pitch_usage_pct'] = df['num_pitches'] / df.groupby(['pitcher', 'player_name', 'season'])['num_pitches'].transform('sum')
     velo_df = df[df['pitch_usage_pct'] >= 0.05].groupby(['pitcher', 'player_name', 'season'])['release_speed_mean'].max().reset_index()
-    velo_df['velo_bucket'] = velo_df['release_speed_mean'].apply(assign_velocity_bucket)
+    assign_bucket_fn = make_velocity_quartile_function(velo_df, velocity_col="release_speed_mean")
+    velo_df['velo_bucket'] = velo_df['release_speed_mean'].apply(assign_bucket_fn)
 
     avg_fb_velo_df = calculate_average_fastball_velocity(df)
 
@@ -273,7 +282,7 @@ if __name__ == "__main__":
 
     velo_diff_df = df.groupby(['pitcher', 'player_name', 'season']).apply(
         pairwise_velo_diff
-    ).reset_index(name='velocity_diff_unweighted')
+    ).reset_index(name='velocity_diff')
 
     final_arsenal_metrics = pd.merge(
         final_arsenal_metrics,
@@ -292,17 +301,28 @@ if __name__ == "__main__":
     final_arsenal_metrics = final_arsenal_metrics[[
         'pitcher', 'player_name', 'season', 'num_pitch_types', 'velo_bucket',
         'avg_fastball_velocity', 'total_bridge_score', 'average_bridge_quality',
-        'arsenal_spread', 'pitch_entropy', 'velocity_diff_unweighted',
+        'arsenal_spread', 'pitch_entropy', 'velocity_diff',
         'xwOBACON', 'csw_rate', 'xERA'
     ]]
+
+    # final_arsenal_metrics.sort_values('num_pitch_types', ascending=False, inplace=True)
+    # final_arsenal_metrics.to_csv(args.final_output, index=False)
+    # print(f"Final merged arsenal metrics saved to {args.final_output}")
+
 
     final_arsenal_metrics.sort_values('num_pitch_types', ascending=False, inplace=True)
     final_arsenal_metrics.to_csv(args.final_output, index=False)
     print(f"Final merged arsenal metrics saved to {args.final_output}")
 
+    # Also save to data/final_metrics directory
+    final_metrics_dir = os.path.join("data", "final_metrics")
+    os.makedirs(final_metrics_dir, exist_ok=True)
+    final_arsenal_metrics.to_csv(os.path.join(final_metrics_dir, "final_arsenal_metrics.csv"), index=False)
+
+
     bucket_names = final_arsenal_metrics['velo_bucket'].dropna().unique()
     for bucket in bucket_names:
         df_bucket = final_arsenal_metrics[final_arsenal_metrics['velo_bucket'] == bucket]
-        filename = f"data/final_arsenal_metrics_{bucket.replace(' ', '_')}.csv"
+        filename = f"data/final_metrics/final_arsenal_metrics_{bucket.replace(' ', '_')}.csv"
         df_bucket.to_csv(filename, index=False)
         print(f"Saved {bucket} metrics to {filename}")
